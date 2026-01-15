@@ -1,0 +1,253 @@
+    internal class FactoryMachines {
+
+        public static List<string> Buttons = new List<string>(File.ReadAllLines("Buttons.txt"));
+
+        // Class to represent a Counter array, used for goal counters or current counters
+        public class Counter {
+            // The actual counter values
+            public int[] Values;
+
+            // Constructor to initialize a Counter with a specific size (all zeros)
+            public Counter(int size) => Values = new int[size];
+
+            // Constructor to initialize a Counter with given values (clone array to prevent side effects)
+            public Counter(int[] values) => Values = (int[])values.Clone();
+
+            // Checks if this counter is smaller than or equal to another counter element-wise
+            public bool SmallerOrEqual(Counter otherCounter) {
+                for (int i = 0; i < Values.Length; i++) {
+                    if (Values[i] > otherCounter.Values[i]) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            // Checks if this counter equals another counter modulo 2 (for parity checks)
+            public bool EqualsModulo2(Counter otherCounter) {
+                for (int i = 0; i < Values.Length; i++) {
+
+                    if (Values[i] % 2 != otherCounter.Values[i] % 2) {
+
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            // Checks if all counter values are zero
+            public bool IsZero() => Values.All(value => value == 0);
+
+            // Returns a clone of this counter (deep copy)
+            public Counter Clone() => new Counter(Values);
+        }
+
+        // Class to represent a Machine with a goal counter, button wiring, and current counters
+        public class Machine {
+            public Counter Goal;               // Target counter values for this machine
+            public List<int[]> ButtonsList;    // List of buttons, each button is an array of counter indices it affects
+            public Counter CurrentCounters;    // Current counter values for the machine
+
+            // Constructor to initialize the machine
+            public Machine(Counter goal, List<int[]> buttonsList, Counter currentCounters) {
+                Goal = goal;
+                ButtonsList = buttonsList;
+                CurrentCounters = currentCounters;
+            }
+        }
+
+        // Class to represent a combination of button presses
+        public class ButtonCombination {
+            public Counter CounterResult;          // Counter values resulting from this button combination
+            public int NumberOfButtonPresses;      // Number of buttons pressed in this combination
+
+            public ButtonCombination(Counter counterResult, int numberOfButtonPresses) {
+                CounterResult = counterResult;
+                NumberOfButtonPresses = numberOfButtonPresses;
+            }
+        }
+
+        // List of all machines parsed from Buttons
+        public List<Machine> Machines = new List<Machine>();
+
+        // Constructor: automatically parse input from the static Buttons list
+        public FactoryMachines() {
+            ParseInput(); // Call parsing function when creating a FactoryMachines instance
+        }
+
+        // Parses each line from Buttons.txt and populates the Machines list
+        private void ParseInput() {
+            foreach (string line in Buttons) // For each line in the input file
+            {
+                // Split the line into fields separated by spaces
+                string[] fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                // -------------------------
+                // Parse goal counter from first field
+                List<int> goalValues = new List<int>();
+                for (int i = 1; i < fields[0].Length - 1; i++) {  // Ignore the surrounding brackets
+                    goalValues.Add(fields[0][i] == '#' ? 1 : 0);
+                }  // '#' = 1, '.' = 0
+                Counter goalCounter = new Counter(goalValues.ToArray());
+
+                // -------------------------
+                // Parse buttons for this machine
+                List<int[]> buttonsList = new List<int[]>();
+                for (int j = 1; j < fields.Length - 1; j++) // All fields except first and last are buttons
+                {
+                    string buttonString = fields[j].Substring(1, fields[j].Length - 2); // Remove surrounding parentheses
+                    int[] buttonIndices = buttonString
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries) // Split indices by comma
+                        .Select(int.Parse)                                 // Convert strings to integers
+                        .ToArray();
+                    buttonsList.Add(buttonIndices); // Add this button's affected counters
+                }
+
+                // -------------------------
+                // Parse initial counter values from last field
+                string counterString = fields[^1].Substring(1, fields[^1].Length - 2); // Remove surrounding braces
+                Counter initialCounters = new Counter(
+                    counterString.Split(',', StringSplitOptions.RemoveEmptyEntries) // Split numbers by comma
+                                 .Select(int.Parse)                                 // Convert to integers
+                                 .ToArray()
+                );
+
+                // Add the parsed machine to the list of machines
+                Machines.Add(new Machine(goalCounter, buttonsList, initialCounters));
+            }
+        }
+
+        // Generates all possible combinations of button presses
+        // Each combination produces a CounterResult and counts how many buttons were pressed
+        private List<ButtonCombination> GenerateAllButtonCombinations(List<int[]> buttonsList, int counterSize) {
+            List<ButtonCombination> allCombinations = new List<ButtonCombination>();
+            int numberOfButtons = buttonsList.Count;
+
+            // Iterate through all possible subsets of buttons (2^numberOfButtons combinations)
+            for (int combinationIndex = 0; combinationIndex < (1 << numberOfButtons); combinationIndex++) {
+                Counter combinedCounter = new Counter(counterSize); // Start from zero counters
+                int totalButtonPresses = 0;                         // Count buttons pressed in this combination
+
+                // Apply buttons that are "on" in this combination
+                for (int buttonIndex = 0; buttonIndex < numberOfButtons; buttonIndex++) {
+                    if ((combinationIndex & (1 << buttonIndex)) != 0) // Check if buttonIndex is pressed
+                    {
+                        totalButtonPresses++; // Increment total pressed buttons
+                        foreach (int counterIndex in buttonsList[buttonIndex]) {
+                            combinedCounter.Values[counterIndex]++; // Increment affected counters
+                        }
+                    }
+                }
+                // Store this combination in the list
+                allCombinations.Add(new ButtonCombination(combinedCounter, totalButtonPresses));
+            }
+            return allCombinations; // Return all possible combinations
+        }
+
+        // Solves Part 1: finds minimum button presses to match goal parity (modulo 2)
+        private int SolvePart1(Counter goalCounter, List<ButtonCombination> buttonCombinations) {
+            int minimumPresses = int.MaxValue; // Start with a very large number
+
+            foreach (ButtonCombination buttonCombination in buttonCombinations) {
+                // If combination's counter matches the goal parity
+                if (buttonCombination.CounterResult.EqualsModulo2(goalCounter)) {
+                    // Keep the minimum number of button presses found
+                    minimumPresses = Math.Min(minimumPresses, buttonCombination.NumberOfButtonPresses);
+                }
+            }
+            return minimumPresses;
+        }
+
+        // Recursive solver for Part 2: finds minimum total button presses to reach exact counters
+        private (int, bool) SolvePart2(Counter currentCounter, List<ButtonCombination> buttonCombinations) {
+            if (currentCounter.IsZero()) return (0, true); // Base case: all counters are zero
+
+            int minimumPresses = int.MaxValue;
+
+            foreach (ButtonCombination buttonCombination in buttonCombinations) {
+                // Skip if this combination exceeds current counter or doesn't match parity
+                if (!buttonCombination.CounterResult.SmallerOrEqual(currentCounter)) {
+
+                    continue;
+                }
+                if (!buttonCombination.CounterResult.EqualsModulo2(currentCounter)) {
+
+                    continue;
+                }
+
+                // Compute the next counter state after "subtracting" this combination
+                Counter nextCounter = new Counter(currentCounter.Values.Length);
+                for (int i = 0; i < currentCounter.Values.Length; i++) {
+                    nextCounter.Values[i] = (currentCounter.Values[i] - buttonCombination.CounterResult.Values[i]) / 2;
+                }
+
+                // Recursively solve for the next state
+                (int recursiveResult, bool valid) = SolvePart2(nextCounter, buttonCombinations);
+                if (!valid) {
+
+                    continue;
+
+                }// Skip invalid combinations
+
+                // Total presses = 2 * presses from recursion + current button presses
+                int totalPresses = 2 * recursiveResult + buttonCombination.NumberOfButtonPresses;
+                if (totalPresses < minimumPresses) {
+                    minimumPresses = totalPresses;
+                }
+            }
+
+            // Return result if found
+            if (minimumPresses < int.MaxValue) {
+
+                return (minimumPresses, true);
+            }
+
+            return (0, false); // No valid combination found
+        }
+
+        // Public method to solve Part 1 for all machines
+        public int RunPart1() {
+            int totalMinimumPresses = 0;
+
+            foreach (Machine machine in Machines) {
+                List<ButtonCombination> allButtonCombinations = GenerateAllButtonCombinations(
+                    machine.ButtonsList, machine.CurrentCounters.Values.Length);
+                totalMinimumPresses += SolvePart1(machine.Goal, allButtonCombinations);
+            }
+
+            return totalMinimumPresses;
+        }
+
+        // Public method to solve Part 2 for all machines
+        public int RunPart2() {
+            int totalMinimumPresses = 0;
+
+            foreach (Machine machine in Machines) {
+                List<ButtonCombination> allButtonCombinations = GenerateAllButtonCombinations(
+                    machine.ButtonsList, machine.CurrentCounters.Values.Length);
+                (int minimumPresses, bool _) = SolvePart2(machine.CurrentCounters, allButtonCombinations);
+                totalMinimumPresses += minimumPresses;
+            }
+
+            return totalMinimumPresses;
+        }
+
+
+        public static void FewestButtonPresses() {
+
+            FactoryMachines solver = new FactoryMachines();
+            int totalMinimumPresses = solver.RunPart1();
+
+            Console.WriteLine($"Total minimum button presses for all machines: {totalMinimumPresses}");
+        }
+
+        public static void FewestButtonPressedJoltage() {
+
+            FactoryMachines solver = new FactoryMachines();
+            int totalMinimumPresses = solver.RunPart2();
+
+            Console.WriteLine($"Total minimum button presses for all machines: {totalMinimumPresses}");
+        }
+    }
+}
