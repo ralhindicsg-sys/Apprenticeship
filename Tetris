@@ -1,0 +1,307 @@
+namespace Tetris {
+    internal class Program {
+        static void Main(string[] args) {
+
+            Console.CursorVisible = false;
+            Game game = new Game();
+            game.Run();
+
+        }
+    }
+}
+     internal class Game {
+
+        Board? board;
+        Tetromino? current;
+        int x, y;
+        int score = 0;
+        int level = 1;
+        int speed = 400;
+        bool paused = false;
+        int moveCooldown = 50; 
+        int rotateCooldown = 150; 
+        int lastMove = 0;
+        int lastRotate = 0;
+        public void Run() {
+            MainMenu();
+        }
+
+        void MainMenu() {
+            Console.Clear();
+            Console.WriteLine("=== TETRIS ===");
+            Console.WriteLine("1. New Player");
+            Console.WriteLine("2. Continue Player");
+            Console.WriteLine("3. Scoreboard");
+            Console.WriteLine("4. Exit");
+
+            char c = Console.ReadKey(true).KeyChar;
+
+            if (c == '1') PlayerManager.NewPlayer();
+            else if (c == '2') PlayerManager.ContinuePlayer();
+            else if (c == '3') PlayerManager.ShowScores();
+            else return;
+
+            StartGame();
+        }
+
+        void StartGame() {
+            board = new Board();
+            score = 0;
+            level = 1;
+            speed = 400;
+            paused = false;
+
+            Spawn();
+            Loop();
+        }
+
+        void Loop() {
+            Stopwatch sw = Stopwatch.StartNew();
+            int lastFall = 0;
+            int fallInterval = speed;
+
+            Console.CursorVisible = false;
+
+            while (true) {
+                
+                HandleInput();
+
+              
+                if (!paused && sw.ElapsedMilliseconds - lastFall >= fallInterval) {
+                    y++;
+                    if (board.Collision(current, x, y)) {
+                        y--;
+                        board.Lock(current, x, y);
+                        int cleared = board.ClearLines();
+                        score += cleared * 100;
+                        level = score / 500 + 1;
+                        fallInterval = Math.Max(100, 400 - level * 40); 
+                        Spawn();
+                        if (board.Collision(current, x, y))
+                            break; 
+                    }
+                    lastFall = (int)sw.ElapsedMilliseconds;
+                }
+
+                
+                Console.SetCursorPosition(0, 0);
+                board.Draw(current, x, y, score, level, paused);
+
+                Thread.Sleep(10); 
+            }
+
+            PlayerManager.SaveScore(score);
+            MainMenu();
+        }
+
+        void HandleInput() {
+            long now = Environment.TickCount;
+
+            while (Console.KeyAvailable) {
+                ConsoleKey key = Console.ReadKey(true).Key;
+
+               
+                if ((key == ConsoleKey.A || key == ConsoleKey.D) && now - lastMove >= moveCooldown) {
+                    if (key == ConsoleKey.A) x--;
+                    if (key == ConsoleKey.D) x++;
+
+                    if (board.Collision(current, x, y)) {
+                        if (key == ConsoleKey.A) x++;
+                        if (key == ConsoleKey.D) x--;
+                    }
+
+                    lastMove = (int)now;
+                }
+
+                
+                if (key == ConsoleKey.W && now - lastRotate >= rotateCooldown) {
+                    current.Rotate();
+                    if (board.Collision(current, x, y)) {
+                        
+                        if (!TryWallKick()) current.Rotate(); 
+                    }
+                    lastRotate = (int)now;
+                }
+
+                if (key == ConsoleKey.S) {
+                    y++;
+                    if (board.Collision(current, x, y)) y--;
+                }
+
+                if (key == ConsoleKey.P) paused = !paused;
+                if (key == ConsoleKey.Q) Environment.Exit(0);
+            }
+        }
+
+        
+        bool TryWallKick() {
+            int[] kicks = { -1, 1, -2, 2 }; 
+            foreach (int k in kicks) {
+                x += k;
+                if (!board.Collision(current, x, y)) return true;
+                x -= k;
+            }
+            return false;
+        }
+
+        void Spawn() {
+            current = Tetromino.Random();
+            x = Board.Width / 2 - 1;
+            y = 0;
+        }
+    }
+
+internal class Board {
+
+    public const int Width = 10;
+    public const int Height = 20;
+
+    int[,] grid = new int[Height, Width];
+    ConsoleColor[,] colors = new ConsoleColor[Height, Width];
+
+    public bool Collision(Tetromino t, int px, int py) {
+        for (int y = 0; y < t.H; y++)
+            for (int x = 0; x < t.W; x++)
+                if (t.Shape[y, x] == 1) {
+                    int fx = px + x;
+                    int fy = py + y;
+                    if (fx < 0 || fx >= Width || fy >= Height) return true;
+                    if (fy >= 0 && grid[fy, fx] == 1) return true;
+                }
+        return false;
+    }
+
+    public void Lock(Tetromino t, int px, int py) {
+        for (int y = 0; y < t.H; y++)
+            for (int x = 0; x < t.W; x++)
+                if (t.Shape[y, x] == 1) {
+                    grid[py + y, px + x] = 1;
+                    colors[py + y, px + x] = t.Color;
+                }
+    }
+
+    public int ClearLines() {
+        int cleared = 0;
+
+        for (int y = Height - 1; y >= 0; y--) {
+            bool full = true;
+            for (int x = 0; x < Width; x++)
+                if (grid[y, x] == 0) full = false;
+
+            if (full) {
+                for (int yy = y; yy > 0; yy--)
+                    for (int x = 0; x < Width; x++) {
+                        grid[yy, x] = grid[yy - 1, x];
+                        colors[yy, x] = colors[yy - 1, x];
+                    }
+                cleared++;
+                y++;
+            }
+        }
+        return cleared;
+    }
+
+    public void Draw(Tetromino t, int px, int py, int score, int level, bool paused) {
+        Console.SetCursorPosition(0, 0); 
+
+        Console.WriteLine($"Player: {PlayerManager.CurrentPlayer}  Score: {score}  Level: {level} {(paused ? "[PAUSED]" : "")}");
+
+        for (int y = 0; y < Height; y++) {
+            for (int x = 0; x < Width; x++) {
+                bool piece = false;
+
+                for (int ty = 0; ty < t.H; ty++)
+                    for (int tx = 0; tx < t.W; tx++)
+                        if (t.Shape[ty, tx] == 1 && py + ty == y && px + tx == x) {
+                            Console.ForegroundColor = t.Color;
+                            Console.Write("[#]");
+                            piece = true;
+                        }
+
+                if (!piece) {
+                    if (grid[y, x] == 1) {
+                        Console.ForegroundColor = colors[y, x];
+                        Console.Write("[#]");
+                    }
+                    else {
+                        Console.ResetColor();
+                        Console.Write(" . ");
+                    }
+                }
+            }
+            Console.WriteLine();
+        }
+
+        Console.ResetColor();
+    }
+}
+
+ internal class Tetromino {
+     public int[,] Shape { get; private set; }
+     public ConsoleColor Color { get; private set; }
+     public int H => Shape.GetLength(0);
+     public int W => Shape.GetLength(1);
+
+     static Random rand = new Random();
+
+     static List<Tetromino> pieces = new List<Tetromino>
+     {
+     new Tetromino(new int[,]{{1,1,1,1}}, ConsoleColor.Cyan),
+     new Tetromino(new int[,]{{1,1},{1,1}}, ConsoleColor.Yellow),
+     new Tetromino(new int[,]{{0,1,0},{1,1,1}}, ConsoleColor.Magenta),
+     new Tetromino(new int[,]{{1,0,0},{1,1,1}}, ConsoleColor.Green),
+     new Tetromino(new int[,]{{0,0,1},{1,1,1}}, ConsoleColor.Blue)
+ };
+
+     Tetromino(int[,] s, ConsoleColor c) {
+         Shape = s;
+         Color = c;
+     }
+
+     public static Tetromino Random() {
+         Tetromino t = pieces[rand.Next(pieces.Count)];
+         return new Tetromino((int[,])t.Shape.Clone(), t.Color);
+     }
+
+     public void Rotate() {
+         int[,] r = new int[W, H];
+         for (int y = 0; y < H; y++)
+             for (int x = 0; x < W; x++)
+                 r[x, H - y - 1] = Shape[y, x];
+         Shape = r;
+     }
+ }
+ internal class PlayerManager {
+     public static string? CurrentPlayer { get; private set; }
+
+     public static void NewPlayer() {
+         Console.Clear();
+         Console.Write("Name: ");
+         CurrentPlayer = Console.ReadLine();
+         File.AppendAllText("players.txt", CurrentPlayer + "\n");
+     }
+
+     public static void ContinuePlayer() {
+         string[] players = File.ReadAllLines("players.txt");
+         for (int i = 0; i < players.Length; i++)
+             Console.WriteLine($"{i + 1}. {players[i]}");
+         CurrentPlayer = players[int.Parse(Console.ReadLine()) - 1];
+     }
+
+     public static void SaveScore(int score) {
+         File.AppendAllText("scores.txt", $"{CurrentPlayer}:{score}\n");
+     }
+
+     public static void ShowScores() {
+         Console.Clear();
+         if (!File.Exists("scores.txt")) return;
+
+         foreach (string[]? s in File.ReadAllLines("scores.txt")
+             .Select(l => l.Split(':'))
+             .OrderByDescending(s => int.Parse(s[1])))
+             Console.WriteLine($"{s[0]} - {s[1]}");
+
+         Console.ReadKey();
+     }
+ }
+
