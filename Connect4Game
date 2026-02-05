@@ -1,0 +1,761 @@
+namespace Connect4Game {
+    internal class Program {
+
+        static void Main(string[] args) {
+
+            bool running = true;
+
+            // Load saved player data from file (persistent storage)
+            Dictionary<string, Player> players = SaveSystem.LoadPlayers();
+
+            while (running) {
+                int choice = ShowTitleScreen(); // Display main menu and get user choice
+
+                if (choice == 5) { // Exit
+                    break;
+                }
+                else if (choice == 4) { // Erase all saved games permanently
+                    SaveSystem.EraseSavedGames();
+                    Center("All saved games erased!");
+                    Console.ReadKey();
+                }
+                else if (choice == 2) { // Show leaderboard / scores
+                    ShowScores(players);
+                    continue;
+                }
+                else if (choice == 3) { // Reset scores to 0 for all players
+                    players.Clear();
+                    SaveSystem.SavePlayers(players);
+                    Center("Scores reset!");
+                    Console.ReadKey();
+                    continue;
+                }
+                else if (choice != 1) { // Invalid menu input
+                    Center("Invalid Input!");
+                    continue;
+                }
+
+                // Variables for game setup
+                List<Player>? playerList = null;
+                (int playerId, char symbol)[,]? board = null;
+                int rows = 0, cols = 0;
+
+                // Player chooses between new game or loading previous game
+                while (true) {
+                    Console.Clear();
+                    Center("1 - New Game");
+                    Center("2 - Load Previous Game");
+                    string? input = ReadLineOrEscape(); // Returns null if Esc pressed
+                    if (input == null) break;
+
+                    if (input == "1") { // New game
+                        int numPlayers = 0;
+
+                        // Ask how many players (2-4)
+                        while (true) {
+                            Console.Clear();
+                            Center("How many players? (2-4, or Esc to cancel):");
+                            string? nInput = ReadLineOrEscape();
+                            if (nInput == null) break;
+
+                            if (int.TryParse(nInput, out int n) && n >= 2 && n <= 4) {
+                                numPlayers = n;
+                                break;
+                            }
+
+                            Center("Invalid input! Enter 2, 3, or 4.");
+                        }
+
+                        if (numPlayers == 0) break; // Cancelled by user
+
+                        // Assign each player a name, symbol, and color
+                        playerList = PlayerAssignment(players, numPlayers);
+                        if (playerList.Count < numPlayers) break; // Cancel if assignment failed
+
+                        // Set board size based on number of players
+                        switch (playerList.Count) {
+                            case 2: rows = 7; cols = 7; break;
+                            case 3: rows = 14; cols = 14; break;
+                            case 4: rows = 20; cols = 20; break;
+                        }
+
+                        // Initialize empty board: (playerId, symbol) tuple per cell
+                        board = new (int, char)[rows, cols];
+                        for (int r = 0; r < rows; r++)
+                            for (int c = 0; c < cols; c++)
+                                board[r, c] = (0, ' '); // 0 = empty, ' ' = no symbol
+
+                        break;
+                    }
+                    else if (input == "2") { // Load saved game
+                        List<string> savedGames = SaveSystem.ListSavedGames();
+                        if (savedGames.Count == 0) {
+                            Center("No previous games found. Press any key...");
+                            Console.ReadKey();
+                            continue;
+                        }
+
+                        // Let user pick which saved game to load
+                        while (true) {
+                            Console.Clear();
+                            Center("Choose a game to load:");
+
+                            // Show each saved game with board size and player symbols
+                            for (int i = 0; i < savedGames.Count; i++) {
+                                (int rows, int cols, List<char> symbols) preview = SaveSystem.PreviewGame(savedGames[i]);
+                                string symbols = string.Join(", ", preview.symbols.Select(s => $"('{s}')"));
+                                Center($"{i + 1} - {preview.rows} x {preview.cols} {symbols}");
+                            }
+                            Center("Enter number or Esc to cancel:");
+
+                            ConsoleKeyInfo keyInfo = Console.ReadKey(true);
+                            if (keyInfo.Key == ConsoleKey.Escape) break;
+
+                            // Convert key press to index (1-based to 0-based)
+                            if (char.IsDigit(keyInfo.KeyChar)) {
+                                int gameChoice = keyInfo.KeyChar - '0';
+                                if (gameChoice >= 1 && gameChoice <= savedGames.Count) {
+                                    // Load the selected game
+                                    (List<Player> players, (int playerId, char symbol)[,] board)? loaded = SaveSystem.LoadLastGame(savedGames[gameChoice - 1]);
+                                    if (loaded != null) {
+                                        playerList = loaded.Value.players;
+
+                                        // Sync loaded players with saved players dictionary
+                                        foreach (Player p in playerList) {
+                                            if (!players.ContainsKey(p.Name)) {
+                                                players[p.Name] = new Player(p.Name, p.Symbol, p.Color, 0);
+                                            }
+                                            else {
+                                                // Preserve wins and color from saved player
+                                                p.Wins = players[p.Name].Wins;
+                                                p.Symbol = players[p.Name].Symbol;
+                                                players[p.Name].Color = p.Color;
+                                            }
+                                        }
+
+                                        // Recreate board structure (empty, but correct size)
+                                        int loadedRows = loaded.Value.board.GetLength(0);
+                                        int loadedCols = loaded.Value.board.GetLength(1);
+                                        board = new (int, char)[loadedRows, loadedCols];
+                                        for (int r = 0; r < loadedRows; r++)
+                                            for (int c = 0; c < loadedCols; c++)
+                                                board[r, c] = (0, ' ');
+
+                                        rows = loadedRows;
+                                        cols = loadedCols;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (playerList != null && board != null) break;
+                    }
+                    else {
+                        Center("Invalid input, try again!"); // Catch all invalid input
+                    }
+                }
+
+                if (playerList == null || board == null) continue; // Skip if setup failed
+
+                bool gameOpen = true;
+                int currentPlayerIndex = 0;
+
+                // Main gameplay loop
+                while (gameOpen) {
+                    bool gameOver = false;
+
+                    while (!gameOver) {
+                        Console.Clear();
+                        DrawBoard(board, playerList); // Display current board state
+
+                        Player currentPlayer = playerList[currentPlayerIndex];
+                        int currentId = currentPlayerIndex + 1; // Player ID used in board array
+
+                        Console.ForegroundColor = currentPlayer.Color;
+                        Center($"{currentPlayer.Name}'s turn. Choose a column (1-{cols}):");
+                        Console.ResetColor();
+
+                        // Player chooses column to place piece
+                        int column;
+                        while (true) {
+                            string? moveInput = ReadLineOrEscape(); // Return null if Esc pressed
+                            if (moveInput == null) {
+                                gameOver = true; // Esc exits game
+                                gameOpen = false;
+                                break;
+                            }
+
+                            // Check if move is valid and place piece
+                            if (int.TryParse(moveInput, out column) && column >= 1 && column <= cols) {
+                                column -= 1; // Convert 1-based input to 0-based index
+                                if (GameLogic.PlacePiece(board, column, currentId, currentPlayer.Symbol)) break;
+                            }
+                            Center("Invalid move. Try again:");
+                        }
+
+                        if (gameOver) break;
+
+                        // Check if current player won
+                        if (GameLogic.CheckWin(board, currentId)) {
+                            Console.Clear();
+                            DrawBoard(board, playerList);
+                            Console.ForegroundColor = currentPlayer.Color;
+                            Center($"{currentPlayer.Name} wins!");
+                            Console.ResetColor();
+
+                            // Update player wins and save
+                            currentPlayer.Wins++;
+                            players[currentPlayer.Name] = currentPlayer;
+                            SaveSystem.SavePlayers(players);
+
+                            gameOver = true;
+                        }
+                        // Check for draw (board full)
+                        else if (GameLogic.BoardFull(board)) {
+                            Console.Clear();
+                            DrawBoard(board, playerList);
+                            Center("It's a draw!");
+                            gameOver = true;
+                        }
+                        else {
+                            // Next player's turn
+                            currentPlayerIndex = (currentPlayerIndex + 1) % playerList.Count;
+                        }
+                    }
+
+                    if (!gameOpen) break;
+
+                    // Save game state after each round
+                    SaveSystem.SaveLastGame(playerList, board);
+
+                    // Post-game options: play again or return to menu
+                    bool waiting = true;
+                    while (waiting) {
+                        Center("Press C to play again or R to return to main menu...");
+                        ConsoleKey k = Console.ReadKey(true).Key;
+
+                        if (k == ConsoleKey.C) {
+                            waiting = false;
+                            gameOver = false;
+                            currentPlayerIndex = 0;
+
+                            // Clear board for new game
+                            for (int r = 0; r < rows; r++)
+                                for (int c = 0; c < cols; c++)
+                                    board[r, c] = (0, ' ');
+                        }
+                        else if (k == ConsoleKey.R) {
+                            waiting = false;
+                            gameOpen = false;
+                            SaveSystem.SavePlayers(players);
+                        }
+                    }
+                }
+            }
+        }
+
+
+
+        // Assigns players for a new game, either new or existing
+        static List<Player> PlayerAssignment(Dictionary<string, Player> savedPlayers, int numPlayers) {
+            List<Player> playerList = new List<Player>();
+            List<string> chosenNames = new List<string>(); // Track already chosen names to prevent duplicates
+            ConsoleColor[] colors = new ConsoleColor[] { ConsoleColor.Yellow, ConsoleColor.Red, ConsoleColor.Green, ConsoleColor.Cyan };
+
+            for (int i = 0; i < numPlayers; i++) {
+                // Prompt user to choose or create a player
+                Player? p = GetPlayer(savedPlayers, $"Player {i + 1}", colors[i], chosenNames);
+                if (p == null) { // User cancelled
+                    playerList.Clear();
+                    break;
+                }
+                playerList.Add(p);
+                chosenNames.Add(p.Name); // Prevent same player from being assigned twice
+            }
+
+            return playerList;
+        }
+
+        // Draws the current board state in the console
+        static void DrawBoard((int playerId, char symbol)[,] board, List<Player> players) {
+            Console.WriteLine("\n\n");
+
+            for (int r = 0; r < board.GetLength(0); r++) {
+                for (int c = 0; c < board.GetLength(1); c++) {
+                    (int playerId, char symbol) cell = board[r, c];
+
+                    // Color pieces according to owning player, or white if empty
+                    if (cell.playerId >= 1 && cell.playerId <= players.Count) {
+                        Console.ForegroundColor = players[cell.playerId - 1].Color;
+                    }
+                    else {
+                        Console.ForegroundColor = ConsoleColor.White;
+                    }
+                    Console.Write($"[{cell.symbol}]"); // Display symbol in brackets
+                    Console.ResetColor();
+                }
+                Console.WriteLine();
+            }
+
+            // Print column numbers below the board for reference
+            for (int c = 1; c <= board.GetLength(1); c++)
+                if (c < 10) Console.Write($" {c} "); // Add padding for single digit numbers
+                else Console.Write($"{c} ");
+            Console.WriteLine("\n");
+        }
+
+        // Handles input for selecting a new or existing player
+        static Player? GetPlayer(Dictionary<string, Player> savedPlayers, string label, ConsoleColor color, List<string> alreadyChosen) {
+            Player? player = null;
+
+            while (player == null) {
+                Console.Clear();
+                Center($"{label}: Press N for new name, L to load existing player, or Esc to return to menu");
+                ConsoleKey key = Console.ReadKey(true).Key;
+
+                if (key == ConsoleKey.Escape) return null;
+
+                if (key == ConsoleKey.N) { // Create new player
+                    string? name = null;
+
+                    while (true) {
+                        Center("Enter new nickname (Esc to cancel):");
+                        name = ReadLineOrEscape();
+                        if (name == null) { Console.Clear(); break; }
+                        else if (string.IsNullOrWhiteSpace(name) || ContainsSpecialCharacters(name)) {
+                            Center("Invalid name! Use letters only. Try again");
+                        }
+                        else break;
+                    }
+
+                    char? symbol = null;
+                    while (true) {
+                        Center("Choose a symbol (single character, Esc to cancel):");
+                        string? input = ReadLineOrEscape();
+                        if (input == null) break;
+                        if (!string.IsNullOrWhiteSpace(input) && input.Length == 1 && char.IsLetterOrDigit(input[0])) {
+                            symbol = input[0]; // Valid symbol chosen
+                            break;
+                        }
+                        else {
+                            Center("Invalid symbol! Enter exactly one letter or number.");
+                        }
+                    }
+
+                    if (symbol.HasValue) {
+                        player = new Player(name, symbol.Value, color);
+                        savedPlayers[name] = player; // Save new player to persistent storage
+                    }
+                }
+                else if (key == ConsoleKey.L) { // Load existing player
+                    player = ChooseExistingPlayer(savedPlayers, color, alreadyChosen);
+                    if (player == null) continue; // User cancelled selection
+                }
+            }
+
+            return player;
+        }
+
+        // Lets user choose a player from existing saved players
+        static Player? ChooseExistingPlayer(Dictionary<string, Player> savedPlayers, ConsoleColor color, List<string> alreadyChosen) {
+            while (true) {
+                Console.Clear();
+
+                if (savedPlayers.Count == 0) { // No saved players exist
+                    Center("No saved players found.");
+                    Center("Press R to return.");
+                    ConsoleKey key = Console.ReadKey(true).Key;
+                    if (key == ConsoleKey.R) return null;
+                    continue;
+                }
+
+                Console.Clear();
+                Center("Select a player from the list (Esc to cancel):");
+
+                // Filter out players already assigned to current game
+                List<Player> list = savedPlayers.Values.Where(p => !alreadyChosen.Contains(p.Name)).ToList();
+
+                // Display selectable players
+                for (int i = 0; i < list.Count; i++)
+                    Center($"{i + 1}. {list[i].Name} ('{list[i].Symbol}') - Wins: {list[i].Wins}");
+
+                Center("Enter the number of the player to select:");
+
+                while (true) {
+                    ConsoleKeyInfo keyInfo = Console.ReadKey(true);
+                    if (keyInfo.Key == ConsoleKey.Escape) return null;
+                    if (char.IsDigit(keyInfo.KeyChar)) {
+                        int choice = keyInfo.KeyChar - '0';
+                        if (choice >= 1 && choice <= list.Count) {
+                            Player selected = list[choice - 1];
+                            selected.Color = color; // Assign color for this game
+                            return selected;
+                        }
+                    }
+                    Center("Invalid input, try again or press Esc to cancel:");
+                }
+            }
+        }
+
+        // Reads a line of input, or returns null if Esc pressed
+        static string? ReadLineOrEscape() {
+            string input = "";
+            ConsoleKeyInfo key;
+            while (true) {
+                key = Console.ReadKey(true);
+                if (key.Key == ConsoleKey.Enter) break;
+                if (key.Key == ConsoleKey.Escape) return null;
+
+                if (!char.IsControl(key.KeyChar)) {
+                    input += key.KeyChar;
+                    Console.Write(key.KeyChar);
+                }
+                else if (key.Key == ConsoleKey.Backspace && input.Length > 0) {
+                    input = input.Substring(0, input.Length - 1);
+                    Console.Write("\b \b");
+                }
+            }
+            Console.WriteLine();
+            return input;
+        }
+
+        // Displays scores sorted by wins
+        static void ShowScores(Dictionary<string, Player> savedPlayers) {
+            Console.Clear();
+            Console.WriteLine("\n\n");
+
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Center("========== SCORES ==========");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Center("  Rank : Player (Symbol) - Wins ");
+            Console.ResetColor();
+            Console.WriteLine();
+
+            if (savedPlayers.Count == 0) {
+                Center("No scores saved yet.");
+            }
+            else {
+                List<Player> orderedPlayers = savedPlayers.Values.OrderByDescending(p => p.Wins).ToList();
+                int rank = 1;
+                foreach (Player player in orderedPlayers) {
+                    string line = $"{rank}. {player.Name} ('{player.Symbol}') : {player.Wins}";
+                    Center(line.Trim());
+                    rank++;
+                }
+            }
+            Console.WriteLine();
+            Center("Press Esc to return...");
+            ReadLineOrEscape();
+        }
+
+        // Centers text in console
+        static void Center(string text) {
+            int width = Console.WindowWidth;
+            int padding = (width - text.Length) / 2;
+            if (padding < 0) padding = 0;
+            Console.WriteLine(new string(' ', padding) + text);
+        }
+
+        // Shows main menu and returns user's choice
+        static int ShowTitleScreen() {
+            Console.Clear();
+            Console.WriteLine("\n\n\n");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Center("====================================");
+            Center("             Connect 4              ");
+            Center("====================================");
+            Console.ResetColor();
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            Center("1 - Start Game");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Center("2 - Show Scores");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Center("3 - Reset Scores");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Gray;
+            Center("4 - Erase Saved Games");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Red;
+            Center("5 - Exit");
+            Console.ResetColor();
+
+            while (true) {
+                string input = Console.ReadLine();
+                if (int.TryParse(input, out int choice) && choice >= 1 && choice <= 5) return choice;
+                Center("Invalid option, try again:");
+            }
+        }
+
+        // Checks for invalid characters in player names
+        static bool ContainsSpecialCharacters(string input) {
+            return input.Any(c => !char.IsLetter(c));
+        }
+    }
+}
+
+  class Player {
+      public string Name { get; set; }
+      public char Symbol { get; set; }
+      public int Wins { get; set; }
+      public ConsoleColor Color { get; set; }
+
+
+      public Player(string name, char symbol, ConsoleColor color, int wins = 0) {
+          Name = name;
+          Symbol = symbol;
+          Wins = wins;
+          Color = color;
+      }
+  }
+
+
+ internal class GameLogic {
+
+     // Places a piece in the specified column for the player
+     // Returns true if placement succeeded, false if column is full
+     public static bool PlacePiece((int playerId, char symbol)[,] board, int column, int playerId, char symbol) {
+         // Start from the bottom row and find the first empty cell
+         for (int r = board.GetLength(0) - 1; r >= 0; r--) {
+             if (board[r, column].playerId == 0) {
+                 board[r, column] = (playerId, symbol); // Place the piece
+                 return true;
+             }
+         }
+         return false; // Column full
+     }
+
+     // Checks if the board is completely full (no moves possible)
+     public static bool BoardFull((int playerId, char symbol)[,] board) {
+         // Only need to check the top row
+         for (int c = 0; c < board.GetLength(1); c++) {
+             if (board[0, c].playerId == 0) {
+                 return false; // At least one empty cell
+             }
+         }
+         return true; // Board full
+     }
+
+     // Checks if the given player has four in a row anywhere on the board
+     public static bool CheckWin((int playerId, char symbol)[,] board, int playerId) {
+         int rows = board.GetLength(0);
+         int cols = board.GetLength(1);
+
+         // Check horizontal win (left to right)
+         for (int r = 0; r < rows; r++) {
+             for (int c = 0; c < cols - 3; c++) { // Stop 3 before end to avoid overflow
+                 if (Enumerable.Range(0, 4).All(i => board[r, c + i].playerId == playerId)) {
+                     return true;
+                 }
+             }
+         }
+
+         // Check vertical win (top to bottom)
+         for (int c = 0; c < cols; c++) {
+             for (int r = 0; r < rows - 3; r++) { // Stop 3 before bottom
+                 if (Enumerable.Range(0, 4).All(i => board[r + i, c].playerId == playerId)) {
+                     return true;
+                 }
+             }
+         }
+
+         // Check diagonal "/" (bottom-left to top-right)
+         for (int r = 3; r < rows; r++) { // Start from row 3 to avoid negative index
+             for (int c = 0; c < cols - 3; c++) {
+                 if (Enumerable.Range(0, 4).All(i => board[r - i, c + i].playerId == playerId)) {
+                     return true;
+                 }
+             }
+         }
+
+         // Check diagonal "\" (top-left to bottom-right)
+         for (int r = 0; r < rows - 3; r++) {
+             for (int c = 0; c < cols - 3; c++) {
+                 if (Enumerable.Range(0, 4).All(i => board[r + i, c + i].playerId == playerId)) {
+                     return true;
+                 }
+             }
+         }
+
+         return false; // No win found
+     }
+
+ }
+
+
+ internal class SaveSystem {
+     private static readonly string folder = "saves"; // Folder where all save files are stored
+     private static readonly string scoreFile = Path.Combine(folder, "scores.txt"); // File storing player scores
+
+     // Ensure the save folder exists before reading/writing
+     private static void EnsureFolder() {
+         if (!Directory.Exists(folder)) {
+             Directory.CreateDirectory(folder);
+         }
+     }
+
+     // Load saved players from scores.txt
+     public static Dictionary<string, Player> LoadPlayers() {
+         EnsureFolder();
+         Dictionary<string, Player> players = new Dictionary<string, Player>();
+
+         if (!File.Exists(scoreFile)) {
+             return players; // Return empty dictionary if no score file exists
+         }
+
+         foreach (string line in File.ReadAllLines(scoreFile)) {
+             string[] parts = line.Split(':');
+
+             // Format: Name:Symbol:Wins
+             if (parts.Length == 3 &&
+                 char.TryParse(parts[1], out char symbol) &&
+                 int.TryParse(parts[2], out int wins)) {
+                 players[parts[0]] = new Player(parts[0], symbol, ConsoleColor.Gray, wins);
+             }
+         }
+         return players;
+     }
+
+     // Save all players and their wins to scores.txt
+     public static void SavePlayers(Dictionary<string, Player> players) {
+         EnsureFolder();
+
+         using (StreamWriter sw = new StreamWriter(scoreFile)) {
+             foreach (Player p in players.Values) {
+                 sw.WriteLine($"{p.Name}:{p.Symbol}:{p.Wins}");
+             }
+         }
+     }
+
+     // Save the current game state (players + board) to a new file
+     public static string SaveLastGame(List<Player> players, (int playerId, char symbol)[,] board) {
+         EnsureFolder();
+
+         string fileName = Path.Combine(folder, $"game_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+
+         using (StreamWriter sw = new StreamWriter(fileName)) {
+             // Save each player's info: Name, Symbol, Color (as int)
+             foreach (Player p in players) {
+                 sw.WriteLine($"PLAYER:{p.Name}:{p.Symbol}:{(int)p.Color}");
+             }
+
+             // Save board dimensions
+             sw.WriteLine($"BOARD:{board.GetLength(0)}:{board.GetLength(1)}");
+
+             // Save board contents row by row (format: playerId,symbol|)
+             for (int r = 0; r < board.GetLength(0); r++) {
+                 for (int c = 0; c < board.GetLength(1); c++) {
+                     sw.Write($"{board[r, c].playerId},{board[r, c].symbol}|");
+                 }
+                 sw.WriteLine();
+             }
+         }
+
+         return fileName; // Return the file path of the saved game
+     }
+
+     // Load a previously saved game from file
+     public static (List<Player> players, (int playerId, char symbol)[,] board)? LoadLastGame(string filePath) {
+         EnsureFolder();
+         if (!File.Exists(filePath)) return null;
+
+         List<Player> players = new List<Player>();
+         (int playerId, char symbol)[,]? board = null;
+         int rows = 0, cols = 0;
+
+         string[] lines = File.ReadAllLines(filePath);
+         int lineIndex = 0;
+
+         // Read player info first
+         while (lineIndex < lines.Length && lines[lineIndex].StartsWith("PLAYER:")) {
+             string[] parts = lines[lineIndex].Split(':');
+             if (parts.Length == 4 &&
+                 char.TryParse(parts[2], out char symbol) &&
+                 int.TryParse(parts[3], out int colorInt)) {
+                 players.Add(new Player(parts[1], symbol, (ConsoleColor)colorInt));
+             }
+             lineIndex++;
+         }
+
+         // Read board dimensions
+         if (lineIndex < lines.Length && lines[lineIndex].StartsWith("BOARD:")) {
+             string[] parts = lines[lineIndex].Split(':');
+             if (parts.Length == 3 &&
+                 int.TryParse(parts[1], out rows) &&
+                 int.TryParse(parts[2], out cols)) {
+                 board = new (int, char)[rows, cols]; // Initialize board
+             }
+             lineIndex++;
+         }
+
+         // Load board contents
+         for (int r = 0; r < rows && lineIndex < lines.Length; r++, lineIndex++) {
+             string[] cells = lines[lineIndex].Split('|', StringSplitOptions.RemoveEmptyEntries);
+             for (int c = 0; c < cols; c++) {
+                 string[] cellParts = cells[c].Split(',');
+                 if (cellParts.Length == 2 &&
+                     int.TryParse(cellParts[0], out int playerId) &&
+                     char.TryParse(cellParts[1], out char symbol)) {
+                     board[r, c] = (playerId, symbol);
+                 }
+                 else {
+                     board[r, c] = (0, ' '); // Default to empty if parsing fails
+                 }
+             }
+         }
+
+         return (players, board); // Return loaded players and board
+     }
+
+     // Return a list of all saved game file paths
+     public static List<string> ListSavedGames() {
+         EnsureFolder();
+         return Directory.GetFiles(folder, "game_*.txt")
+                         .OrderBy(f => f) // Sorted by filename (chronological)
+                         .ToList();
+     }
+
+     // Quickly preview saved game info without loading the entire board
+     public static (int rows, int cols, List<char> symbols) PreviewGame(string filePath) {
+         string[] lines = File.ReadAllLines(filePath);
+
+         int rows = 0, cols = 0;
+         List<char> symbols = new List<char>();
+
+         foreach (string line in lines) {
+             if (line.StartsWith("BOARD:")) {
+                 string[] parts = line.Split(':');
+                 rows = int.Parse(parts[1]);
+                 cols = int.Parse(parts[2]);
+             }
+             else if (line.StartsWith("PLAYER:")) {
+                 string[] parts = line.Split(':');
+                 if (parts.Length >= 3 && char.TryParse(parts[2], out char s))
+                     symbols.Add(s);
+             }
+         }
+
+         return (rows, cols, symbols); // Return board size and player symbols
+     }
+
+     // Delete all saved game files
+     public static void EraseSavedGames() {
+         EnsureFolder();
+
+         string[] savedGames = Directory.GetFiles(folder, "game_*.txt");
+         foreach (string file in savedGames) {
+             try {
+                 File.Delete(file);
+             }
+             catch (Exception ex) {
+                 Console.WriteLine($"Could not delete {file}: {ex.Message}");
+             }
+         }
+     }
+ }
+
+
