@@ -87,7 +87,7 @@ namespace Tetris {
                 Console.SetCursorPosition(0, 0);
                 board.Draw(current, x, y, score, level, paused);
 
-                Thread.Sleep(10); 
+                Thread.Sleep(1); 
             }
 
             PlayerManager.SaveScore(score);
@@ -95,9 +95,10 @@ namespace Tetris {
         }
 
         void HandleInput() {
-            long now = Environment.TickCount;
 
             while (Console.KeyAvailable) {
+
+                long now = Environment.TickCount64;
                 ConsoleKey key = Console.ReadKey(true).Key;
 
                
